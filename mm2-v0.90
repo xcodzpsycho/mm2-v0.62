@@ -24,7 +24,7 @@ local DISCORD_LINK = "discord.gg/RHS3J44G9k"
 -- the autoexec folder. It only runs after a real disconnect while "Auto Reconnect" is on. The key of the key system
 -- (getgenv().SCRIPT_KEY) is passed on automatically, a loader can also set getgenv().APEX_SOURCE_URL instead of this link.
 local RECONNECT_SOURCE = "https://api.jnkie.com/api/v1/luascripts/public/7d531550d1a02f299efc7b309bee4b441cce97c581f28096719ba6834e0714bb/download"
-local SCRIPT_VERSION = "v0.89" -- shown in the title bar, bump it with every update
+local SCRIPT_VERSION = "v0.90" -- shown in the title bar, bump it with every update
 -- RECONNECT KEY: normally nothing to do - the key you started the script with (getgenv().SCRIPT_KEY) is remembered at
 -- startup and used again after a reconnect. Only if you still get "No key provided" after a rejoin, put your key
 -- between the quotes (it is then stored in plain text in this file - do not share the file).
@@ -7568,18 +7568,26 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 			-- ---- the tag itself -------------------------------------------------------------------
 			-- true while another APEX user in this server is still collecting coins
 			FloatingUi.anyApexBusy = function()
-				local others, busyList = 0, {}
+				local busyList = {}
+				local apexOthers, plainOthers, plainBusy = 0, 0, 0
 				for _, p in ipairs(Players:GetPlayers()) do
 					if p ~= LocalPlayer then
-						others += 1
-						if apexBusy[p] and apexPlayers[p] then busyList[#busyList + 1] = p end
+						if apexPlayers[p] then
+							apexOthers += 1
+							if apexBusy[p] then busyList[#busyList + 1] = p end
+						else
+							plainOthers += 1
+							if apexBusy[p] then plainBusy += 1 end
+						end
 					end
 				end
-				-- the same flag on half of the server or more is something the game does for everybody, not APEX users
-				if #busyList >= 2 and #busyList * 2 >= others then return false, {} end
+				local dbg = ("apex users: %d, collecting: %d, other players: %d, of them with the flag: %d"):format(apexOthers, #busyList, plainOthers, plainBusy)
+				-- the flag on half of the NON-APEX players (at least 2) is something the game does for everybody, not APEX users.
+				-- Only non-APEX players are counted: several APEX accounts collecting together are exactly the case to wait for.
+				if plainBusy >= 2 and plainBusy * 2 >= plainOthers then return false, {}, dbg .. " (flag ignored: common animation)" end
 				local names = {}
 				for i, p in ipairs(busyList) do names[i] = p.Name end
-				return #busyList > 0, names
+				return #busyList > 0, names, dbg
 			end
 
 			Players.PlayerRemoving:Connect(function(p)
@@ -8397,6 +8405,7 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 				local hasElite, eliteKnown, eliteRetryAt = false, false, 0
 				local resetLockUntil = 0
 				local fullSince = nil
+				local resetInfo = "no APEX check"
 				local lastBusy = -1000
 				local lastWaitPrint = 0
 				-- this client counts as "still collecting" while Auto Collect is working on coins and the bag is not full
@@ -8502,8 +8511,9 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 						if fx.autoResetFull and full and graceOver and os.clock() >= resetLockUntil then
 							local othersBusy = false
 							if FloatingUi.anyApexBusy then
-								local ok, busy, names = pcall(FloatingUi.anyApexBusy)
+								local ok, busy, names, dbg = pcall(FloatingUi.anyApexBusy)
 								othersBusy = ok and busy == true
+								resetInfo = ok and dbg or tostring(busy)
 								if othersBusy and os.clock() - lastWaitPrint > 10 then
 									lastWaitPrint = os.clock()
 									print("[APEX] Auto Reset waits for APEX users still collecting: " .. table.concat(names or {}, ", "))
@@ -8513,6 +8523,7 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 								local char = LocalPlayer.Character
 								local hum = char and char:FindFirstChildOfClass("Humanoid")
 								if hum and hum.Health > 0 then
+									print("[APEX] Auto Reset: bag full, nobody to wait for (" .. tostring(resetInfo) .. ")")
 									hum.Health = 0
 									resetLockUntil = os.clock() + 3 -- the bag needs a moment to empty after the reset
 								end
