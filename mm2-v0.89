@@ -24,7 +24,7 @@ local DISCORD_LINK = "discord.gg/RHS3J44G9k"
 -- the autoexec folder. It only runs after a real disconnect while "Auto Reconnect" is on. The key of the key system
 -- (getgenv().SCRIPT_KEY) is passed on automatically, a loader can also set getgenv().APEX_SOURCE_URL instead of this link.
 local RECONNECT_SOURCE = "https://api.jnkie.com/api/v1/luascripts/public/7d531550d1a02f299efc7b309bee4b441cce97c581f28096719ba6834e0714bb/download"
-local SCRIPT_VERSION = "v0.88" -- shown in the title bar, bump it with every update
+local SCRIPT_VERSION = "v0.89" -- shown in the title bar, bump it with every update
 -- RECONNECT KEY: normally nothing to do - the key you started the script with (getgenv().SCRIPT_KEY) is remembered at
 -- startup and used again after a reconnect. Only if you still get "No key provided" after a rejoin, put your key
 -- between the quotes (it is then stored in plain text in this file - do not share the file).
@@ -7410,6 +7410,11 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 			local SIG_BUSY = "507770677" -- default R15 cheer emote: only played (at the lowest priority) while this user is still collecting coins
 			local apexBusy = {} -- [player] = true while that APEX user is still collecting
 			local busySeen = {} -- [player] = how many checks in a row the flag was visible (one is not enough)
+			local busyLast = {} -- [player] = when the flag was last confirmed
+			-- a confirmed "still collecting" flag counts for this many seconds. Phones (low frame rate, animation culling,
+			-- lag) lose the other player's animation tracks for a moment between two coins; without the hold the bag
+			-- owner saw "nobody is collecting" in those gaps and reset too early.
+			local BUSY_HOLD = 10
 			local apexPlayers = {}
 			getApexPlayers = function() return apexPlayers end
 			apexMemberCheck = function(player) return apexPlayers[player] == true end
@@ -7486,8 +7491,10 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 						if p ~= LocalPlayer then
 							local has, busy = false, false
 							pcall(function() has, busy = hasSignature(p) end)
-							busySeen[p] = (has and busy) and ((busySeen[p] or 0) + 1) or 0
-							apexBusy[p] = busySeen[p] >= 2 and true or nil
+							-- the flag is judged on its own: one missed idle-signature check must not hide a collecting player
+							busySeen[p] = busy and ((busySeen[p] or 0) + 1) or 0
+							if busySeen[p] >= 2 then busyLast[p] = os.clock() end
+							apexBusy[p] = (busyLast[p] and os.clock() - busyLast[p] < BUSY_HOLD) and true or nil
 							if has then
 								seen[p] = (seen[p] or 0) + 1
 								missing[p] = 0
@@ -7577,7 +7584,7 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 
 			Players.PlayerRemoving:Connect(function(p)
 				apexPlayers[p], seen[p], missing[p] = nil, nil, nil
-				apexBusy[p], busySeen[p] = nil, nil
+				apexBusy[p], busySeen[p], busyLast[p] = nil, nil, nil
 				removeTag(p)
 			end)
 
@@ -8389,6 +8396,7 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 				local BAG_ORDER = {"Coin", "Egg", "BeachBall", "Candy", "SnowToken"}
 				local hasElite, eliteKnown, eliteRetryAt = false, false, 0
 				local resetLockUntil = 0
+				local fullSince = nil
 				local lastBusy = -1000
 				local lastWaitPrint = 0
 				-- this client counts as "still collecting" while Auto Collect is working on coins and the bag is not full
@@ -8480,7 +8488,18 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 						if autoCollectCoinsEnabled and not full and type(status) == "string" and status:sub(1, 10) == "Collecting" then
 							lastBusy = os.clock()
 						end
-						if fx.autoResetFull and full and os.clock() >= resetLockUntil then
+						if not full then fullSince = nil elseif not fullSince then fullSince = os.clock() end
+						-- other APEX users need a few seconds to be seen (their flag has to show up on this client first)
+						local graceOver = true
+						if full and fullSince and getApexPlayers then
+							local ok, list = pcall(getApexPlayers)
+							if ok and type(list) == "table" then
+								for p in pairs(list) do
+									if p ~= LocalPlayer and p.Parent then graceOver = os.clock() - fullSince >= 6 break end
+								end
+							end
+						end
+						if fx.autoResetFull and full and graceOver and os.clock() >= resetLockUntil then
 							local othersBusy = false
 							if FloatingUi.anyApexBusy then
 								local ok, busy, names = pcall(FloatingUi.anyApexBusy)
