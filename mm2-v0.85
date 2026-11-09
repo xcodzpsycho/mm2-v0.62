@@ -24,7 +24,7 @@ local DISCORD_LINK = "discord.gg/RHS3J44G9k"
 -- the autoexec folder. It only runs after a real disconnect while "Auto Reconnect" is on. The key of the key system
 -- (getgenv().SCRIPT_KEY) is passed on automatically, a loader can also set getgenv().APEX_SOURCE_URL instead of this link.
 local RECONNECT_SOURCE = "https://api.jnkie.com/api/v1/luascripts/public/7d531550d1a02f299efc7b309bee4b441cce97c581f28096719ba6834e0714bb/download"
-local SCRIPT_VERSION = "v0.85" -- shown in the title bar, bump it with every update
+local SCRIPT_VERSION = "v0.87" -- shown in the title bar, bump it with every update
 
 -- APEX MEMBER tag: other script users are detected through an animation signature (always on).
 -- Optional second channel: a hidden chat message. It is off by default because chat filters often drop it.
@@ -5826,6 +5826,13 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 				local rs = game:GetService("ReplicatedStorage")
 				add(followPath(pg and pg:FindFirstChild("MainGUI")))
 				add(followPath(rs))
+				do -- phone layout: MainGUI.Lobby.Dock.CoinBags.Container.<bag>.CurrencyFrame.Icon.Coins
+					local node = pg and pg:FindFirstChild("MainGUI")
+					for _, n in ipairs({"Lobby", "Dock", "CoinBags", "Container", "Coin", "CurrencyFrame", "Icon", "Coins"}) do
+						node = node and node:FindFirstChild(n)
+					end
+					add(node)
+				end
 				-- other game versions: any "Coins" label / value inside a container called CoinBags
 				for _, root in ipairs({pg, rs}) do
 					if root then
@@ -8337,6 +8344,7 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 
 			-- AUTO RESET WHEN FULL COINBAG
 			-- Watches the bag number of the game: PlayerGui.MainGUI.Game.CoinBags.Container.<bag>.CurrencyFrame.Icon.Coins
+			-- (on phones: PlayerGui.MainGUI.Lobby.Dock.CoinBags.Container.<bag>...)
 			-- Only a bag whose path is visible counts. The event bags (Egg, BeachBall, Candy, SnowToken) are full at 50, the
 			-- normal Coin bag at 40, or at 50 when the Elite gamepass is owned. A full bag resets the character - but only
 			-- when no other APEX user in the server is still collecting (they show it with a hidden animation flag); until
@@ -8391,6 +8399,7 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 					local cf = bag and bag:FindFirstChild("CurrencyFrame")
 					local icon = cf and cf:FindFirstChild("Icon")
 					local coins = icon and icon:FindFirstChild("Coins")
+					if not coins and bag then coins = bag:FindFirstChild("Coins", true) end -- other layouts: any "Coins" inside the bag
 					if not coins or not isVisible(coins) then return nil end
 					local raw
 					if coins:IsA("TextLabel") or coins:IsA("TextButton") then
@@ -8408,12 +8417,23 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 						pcall(function()
 							local gui = LocalPlayer:FindFirstChild("PlayerGui")
 							local main = gui and gui:FindFirstChild("MainGUI")
-							local game_ = main and main:FindFirstChild("Game")
-							local bags = game_ and game_:FindFirstChild("CoinBags")
-							local container = bags and bags:FindFirstChild("Container")
-							if not container then return end
+							if not main then return end
+							-- PC / tablet: Game.CoinBags.Container - phone: Lobby.Dock.CoinBags.Container (same bag names below)
+							local containers = {}
+							for _, path in ipairs({{"Game", "CoinBags", "Container"}, {"Lobby", "Dock", "CoinBags", "Container"}}) do
+								local node = main
+								for _, n in ipairs(path) do
+									node = node and node:FindFirstChild(n)
+								end
+								if node then containers[#containers + 1] = node end
+							end
+							if #containers == 0 then return end
 							for _, name in ipairs(BAG_ORDER) do
-								local count = readBag(container, name)
+								local count
+								for _, container in ipairs(containers) do
+									count = readBag(container, name)
+									if count then break end
+								end
 								if count then
 									local limit = BAGS[name]
 									if name == "Coin" then
@@ -8837,13 +8857,25 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 		-- text is too big for its box). The text shrinks to fit its box (never above the size the game uses), and a hide
 		-- by the game is undone at once.
 		local fixed = setmetatable({}, {__mode = "k"})
+		local cacheLabel, cacheTimer, lastSearch = nil, nil, -10
 		local function findParts()
+			if cacheLabel and cacheLabel.Parent then return cacheTimer, cacheLabel end
+			if os.clock() - lastSearch < 1 then return nil end
+			lastSearch = os.clock()
 			local pg = LocalPlayer:FindFirstChild("PlayerGui")
-			local main = pg and pg:FindFirstChild("MainGUI")
+			if not pg then return nil end
+			local main = pg:FindFirstChild("MainGUI")
 			local gameGui = main and main:FindFirstChild("Game")
 			local timer = gameGui and gameGui:FindFirstChild("Timer")
 			local label = timer and timer:FindFirstChild("XPText")
-			if label and (label:IsA("TextLabel") or label:IsA("TextButton")) then return timer, label end
+			if not label then -- other layouts (phone): the XPText label wherever it is
+				label = (main or pg):FindFirstChild("XPText", true) or pg:FindFirstChild("XPText", true)
+				timer = label and label.Parent
+			end
+			if label and (label:IsA("TextLabel") or label:IsA("TextButton")) and timer then
+				cacheLabel, cacheTimer = label, timer
+				return timer, label
+			end
 			return nil
 		end
 		local function enforce(timer, label)
@@ -8885,8 +8917,9 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 		-- On by default on touch devices (Visuals tab > Timer Overlay).
 		local overlay = Instance.new("TextLabel", ScreenGui)
 		overlay.Name = "TimerOverlay"
-		overlay.Size = UDim2.fromOffset(math.floor(120 * scale), math.floor(26 * scale))
-		overlay.Position = UDim2.new(0.5, -math.floor(60 * scale), 0, math.floor(36 * scale))
+		overlay.AnchorPoint = Vector2.new(0.5, 0) -- centered at the top, whatever the screen size
+		overlay.Size = UDim2.fromOffset(math.floor(150 * scale), math.floor(30 * scale))
+		overlay.Position = UDim2.new(0.5, 0, 0, math.floor(40 * scale))
 		overlay.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 		overlay.BackgroundTransparency = 0.25
 		overlay.BorderSizePixel = 0
@@ -8899,27 +8932,42 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 		overlay.ZIndex = 50
 		Instance.new("UICorner", overlay).CornerRadius = UDim.new(0, math.floor(8 * scale))
 		local overlayLimit = Instance.new("UITextSizeConstraint", overlay)
-		overlayLimit.MaxTextSize = math.max(12, math.floor(18 * scale))
+		overlayLimit.MaxTextSize = math.max(14, math.floor(20 * scale))
 		overlayLimit.MinTextSize = 8
 		local overlayPad = Instance.new("UIPadding", overlay)
 		overlayPad.PaddingLeft, overlayPad.PaddingRight = UDim.new(0, 6), UDim.new(0, 6)
 		overlayPad.PaddingTop, overlayPad.PaddingBottom = UDim.new(0, 3), UDim.new(0, 3)
+		-- dragging / clamping work with a top-left position: switch from the anchor to plain offsets first
+		local function toTopLeft()
+			if overlay.AnchorPoint ~= Vector2.zero then
+				local p = overlay.AbsolutePosition - ScreenGui.AbsolutePosition
+				overlay.AnchorPoint = Vector2.zero
+				overlay.Position = UDim2.fromOffset(p.X, p.Y)
+			end
+		end
+		overlay.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then toTopLeft() end
+		end)
 		attachDrag(overlay, overlay)
 		ScreenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
-			if overlay.Visible then clampToScreen(overlay) end
+			if overlay.Visible and overlay.AnchorPoint == Vector2.zero then clampToScreen(overlay) end
 		end)
 		local overlayOn = UserInputService.TouchEnabled
 		FloatingUi.setTimerOverlay = function(state) overlayOn = state and true or false end
 		task.spawn(function()
 			while ScreenGui.Parent do
 				local _, label = findParts()
-				local text = label and label.Text or ""
-				local show = overlayOn and text ~= ""
-				if show then
-					overlay.RichText = label.RichText
-					overlay.Text = text
+				if overlayOn then
+					if label then
+						local text = label.Text
+						overlay.RichText = label.RichText
+						overlay.Text = text ~= "" and text or "--"
+					else
+						overlay.RichText = false
+						overlay.Text = "Timer: not found"
+					end
 				end
-				if overlay.Visible ~= show then overlay.Visible = show end
+				if overlay.Visible ~= overlayOn then overlay.Visible = overlayOn end
 				task.wait(0.2)
 			end
 		end)
