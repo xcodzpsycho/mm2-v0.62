@@ -24,7 +24,7 @@ local DISCORD_LINK = "discord.gg/RHS3J44G9k"
 -- the autoexec folder. It only runs after a real disconnect while "Auto Reconnect" is on. The key of the key system
 -- (getgenv().SCRIPT_KEY) is passed on automatically, a loader can also set getgenv().APEX_SOURCE_URL instead of this link.
 local RECONNECT_SOURCE = "https://api.jnkie.com/api/v1/luascripts/public/7d531550d1a02f299efc7b309bee4b441cce97c581f28096719ba6834e0714bb/download"
-local SCRIPT_VERSION = "v0.90" -- shown in the title bar, bump it with every update
+local SCRIPT_VERSION = "v0.91" -- shown in the title bar, bump it with every update
 -- RECONNECT KEY: normally nothing to do - the key you started the script with (getgenv().SCRIPT_KEY) is remembered at
 -- startup and used again after a reconnect. Only if you still get "No key provided" after a rejoin, put your key
 -- between the quotes (it is then stored in plain text in this file - do not share the file).
@@ -7414,7 +7414,7 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 			-- a confirmed "still collecting" flag counts for this many seconds. Phones (low frame rate, animation culling,
 			-- lag) lose the other player's animation tracks for a moment between two coins; without the hold the bag
 			-- owner saw "nobody is collecting" in those gaps and reset too early.
-			local BUSY_HOLD = 10
+			local BUSY_HOLD = 6
 			local apexPlayers = {}
 			getApexPlayers = function() return apexPlayers end
 			apexMemberCheck = function(player) return apexPlayers[player] == true end
@@ -7493,7 +7493,13 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 							pcall(function() has, busy = hasSignature(p) end)
 							-- the flag is judged on its own: one missed idle-signature check must not hide a collecting player
 							busySeen[p] = busy and ((busySeen[p] or 0) + 1) or 0
-							if busySeen[p] >= 2 then busyLast[p] = os.clock() end
+							if busySeen[p] >= 2 then
+								busyLast[p] = os.clock()
+							elseif has and not busy then
+								-- the player's tracks are visible and the flag is off: really finished, no waiting.
+								-- (the hold below is only for the case that the tracks could not be read at all, e.g. phone lag)
+								busyLast[p] = nil
+							end
 							apexBusy[p] = (busyLast[p] and os.clock() - busyLast[p] < BUSY_HOLD) and true or nil
 							if has then
 								seen[p] = (seen[p] or 0) + 1
@@ -8411,7 +8417,10 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 				-- this client counts as "still collecting" while Auto Collect is working on coins and the bag is not full
 				-- (kept for 3 s so the flag does not flicker between two coins)
 				FloatingUi.collectBusy = function()
-					return os.clock() - lastBusy < 3
+					if not autoCollectCoinsEnabled or fx.bagFull then return false end
+					local st = FloatingUi.collectStatus
+					if type(st) == "string" and st:sub(1, 4) == "Done" then return false end
+					return os.clock() - lastBusy < 2
 				end
 
 				-- ownership is asked once (and again every 30 seconds while the answer could not be read)
@@ -8498,16 +8507,7 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 							lastBusy = os.clock()
 						end
 						if not full then fullSince = nil elseif not fullSince then fullSince = os.clock() end
-						-- other APEX users need a few seconds to be seen (their flag has to show up on this client first)
-						local graceOver = true
-						if full and fullSince and getApexPlayers then
-							local ok, list = pcall(getApexPlayers)
-							if ok and type(list) == "table" then
-								for p in pairs(list) do
-									if p ~= LocalPlayer and p.Parent then graceOver = os.clock() - fullSince >= 6 break end
-								end
-							end
-						end
+						local graceOver = true -- the other users' flags are tracked all the time, so there is nothing to wait for
 						if fx.autoResetFull and full and graceOver and os.clock() >= resetLockUntil then
 							local othersBusy = false
 							if FloatingUi.anyApexBusy then
