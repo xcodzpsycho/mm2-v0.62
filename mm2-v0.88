@@ -24,7 +24,26 @@ local DISCORD_LINK = "discord.gg/RHS3J44G9k"
 -- the autoexec folder. It only runs after a real disconnect while "Auto Reconnect" is on. The key of the key system
 -- (getgenv().SCRIPT_KEY) is passed on automatically, a loader can also set getgenv().APEX_SOURCE_URL instead of this link.
 local RECONNECT_SOURCE = "https://api.jnkie.com/api/v1/luascripts/public/7d531550d1a02f299efc7b309bee4b441cce97c581f28096719ba6834e0714bb/download"
-local SCRIPT_VERSION = "v0.87" -- shown in the title bar, bump it with every update
+local SCRIPT_VERSION = "v0.88" -- shown in the title bar, bump it with every update
+-- RECONNECT KEY: normally nothing to do - the key you started the script with (getgenv().SCRIPT_KEY) is remembered at
+-- startup and used again after a reconnect. Only if you still get "No key provided" after a rejoin, put your key
+-- between the quotes (it is then stored in plain text in this file - do not share the file).
+local RECONNECT_KEY = ""
+-- the key is read at startup: key system loaders often clear getgenv().SCRIPT_KEY once the script runs, so reading it
+-- only at disconnect time finds nothing and the rejoined script is started without a key
+local CAPTURED_KEY = nil
+pcall(function()
+	local envs = {}
+	if getgenv then envs[#envs + 1] = getgenv() end
+	envs[#envs + 1] = _G
+	if shared then envs[#envs + 1] = shared end
+	for _, env in ipairs(envs) do
+		for _, name in ipairs({"SCRIPT_KEY", "script_key", "ScriptKey"}) do
+			local v = env[name]
+			if type(v) == "string" and v ~= "" then CAPTURED_KEY = v return end
+		end
+	end
+end)
 
 -- APEX MEMBER tag: other script users are detected through an animation signature (always on).
 -- Optional second channel: a hidden chat message. It is off by default because chat filters often drop it.
@@ -5548,11 +5567,20 @@ function loadMainHub(scale, introDelay) -- introDelay: wait before the window po
 				if RC.queued then return true end -- queued once per session, a second one would start the script twice
 				local okJson, json = pcall(function() return HttpService:JSONEncode(info) end)
 				-- the key of the key system is set again before the script is loaded
+				local key = trim(RECONNECT_KEY)
+				if key == "" then key = CAPTURED_KEY or "" end
+				if key == "" then
+					pcall(function()
+						local g = getgenv and getgenv()
+						if g and type(g.SCRIPT_KEY) == "string" then key = g.SCRIPT_KEY end
+					end)
+				end
 				local keyLine = ""
-				pcall(function()
-					local g = getgenv and getgenv()
-					if g and g.SCRIPT_KEY ~= nil then keyLine = ("getgenv().SCRIPT_KEY = %q\n"):format(tostring(g.SCRIPT_KEY)) end
-				end)
+				if key ~= "" then
+					keyLine = ("getgenv().SCRIPT_KEY = %q\ngetgenv().script_key = %q\n"):format(key, key)
+				else
+					rcNotify("No key found for the reconnect - set getgenv().SCRIPT_KEY before running the script, or RECONNECT_KEY at the top")
+				end
 				local code = keyLine .. (okJson and ("pcall(function() getgenv().APEX_RECONNECT_INFO = game:GetService('HttpService'):JSONDecode([==[" .. json .. "]==]) end)\n") or "") .. loader
 				local ok, err = pcall(q, code)
 				if ok then RC.queued = true return true end
